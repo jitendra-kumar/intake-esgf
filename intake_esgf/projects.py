@@ -15,6 +15,17 @@ class ESGFProject(ABC):
     abstract.
     """
 
+    facets: list[str]
+
+    @property
+    def name(self) -> str:
+        """
+        Return the exact value of the `project` facet used by the ESGF indices.
+
+        Defaults to the class name, subclasses override when it differs.
+        """
+        return type(self).__name__
+
     @abstractmethod
     def master_id_facets(self) -> list[str]:
         """
@@ -381,11 +392,11 @@ class input4MIPs(ESGFProject):
 
 
 class CMIP6Plus(CMIP6):
-    pass
+    name = "CMIP6Plus"
 
 
 class e3sm(CMIP6):
-    pass
+    name = "e3sm"
 
 
 class WrPMIP(ESGFProject):
@@ -477,6 +488,8 @@ class CMIP7(ESGFProject):
 
 
 class CORDEXCMIP6(ESGFProject):  # Coordinated Regional Climate Downscaling Experiment
+    name = "CORDEX-CMIP6"
+
     # CORDEX-CMIP6.DD.NAM-25.CCCma.CanESM5-1.historical.r1i1p1f2.CanRCM5-SN.v1-r2.mon.tas
     def __init__(self):
         self.facets = [
@@ -540,6 +553,21 @@ projects = {
 }
 
 
+def get_project(project_id: str) -> ESGFProject:
+    """
+    Return the project registered under the given name, ignoring case.
+
+    Raises
+    ------
+    ProjectNotSupported
+        If the project is not in the registry.
+    """
+    project = projects.get(project_id.lower())
+    if project is None:
+        raise ProjectNotSupported(project_id)
+    return project
+
+
 def get_project_facets(content: dict[str, str | list[str]]) -> list[str]:
     """
     Return the facets for the project found defined in the given content.
@@ -559,11 +587,7 @@ def get_project_facets(content: dict[str, str | list[str]]) -> list[str]:
         project_id = "CMIP6"
     elif isinstance(project_id, list):
         project_id = project_id[0]
-    project_id = str(project_id).lower()
-    project = projects.get(project_id, None)
-    if project is None:
-        raise ProjectNotSupported(project_id)
-    return project.id_facets()
+    return get_project(str(project_id)).id_facets()
 
 
 def get_likely_project(facets: list | dict) -> str:
@@ -583,4 +607,4 @@ def get_likely_project(facets: list | dict) -> str:
     return max(counts, key=counts.__getitem__)
 
 
-__all__ = ["projects", "get_project_facets", "get_likely_project"]
+__all__ = ["projects", "get_project", "get_project_facets", "get_likely_project"]

@@ -4,9 +4,11 @@ import os
 import re
 import signal
 import tempfile
+import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 from threading import Event
@@ -28,8 +30,8 @@ from intake_esgf.database import (
     log_download_information,
     sort_download_links,
 )
-from intake_esgf.exceptions import NoSearchResults, ProjectNotSupported, StalledDownload
-from intake_esgf.projects import projects
+from intake_esgf.exceptions import NoSearchResults, StalledDownload
+from intake_esgf.projects import get_project
 
 
 def _get_umask() -> int:
@@ -267,9 +269,7 @@ def combine_results(
             f"Only single project queries are supported, but found {project_id}"
         )
     project_id = project_id[0]
-    project = projects.get(project_id.lower(), None)
-    if project is None:
-        raise ProjectNotSupported(project_id)
+    project = get_project(project_id)
     variable_facet = project.variable_facet()
     combine_time = time.time()
     df = df.drop_duplicates(subset=[variable_facet, "id"]).reset_index(drop=True)
@@ -348,7 +348,24 @@ def handle_sigint(signum, frame):
     done_event.set()
 
 
-signal.signal(signal.SIGINT, handle_sigint)
+@contextmanager
+def _sigint_handler() -> Iterator[None]:
+    """
+    Temporarily route SIGINT to `done_event` so downloads can be interrupted.
+
+    Signal handlers may only be installed from the main thread, so this does nothing
+    elsewhere. The previous handler is always restored on exit, which keeps the host
+    application's Ctrl-C behavior intact outside of a download.
+    """
+    done_event.clear()
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.signal(signal.SIGINT, handle_sigint)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 def download_and_verify(
@@ -533,7 +550,7 @@ def download_urls(
         esg_dataroot=esg_dataroot if esg_dataroot is not None else [],
     )
     PROGRESS.disable = quiet
-    with PROGRESS:
+    with _sigint_handler(), PROGRESS:
         download_size, download_unit = get_total_size(infos)
         master_id = PROGRESS.add_task(
             f"Downloading {len(infos)} file(s) totalling {download_size:.1f} [{download_unit}]",
@@ -579,9 +596,7 @@ def get_search_criteria(
         raise ValueError(
             "Cannot get search criteria if 'project' not in the attributes or specified."
         )
-    project = projects.get(project_id.lower())
-    if project is None:
-        raise ProjectNotSupported(project_id)
+    project = get_project(project_id)
     search = {
         key: ds.attrs[key]
         for key in set(project.master_id_facets()).intersection(ds.attrs.keys())
@@ -614,9 +629,7 @@ def add_variable(variable_id: str, ds: xr.Dataset, catalog) -> xr.Dataset:
             f"Only single project queries are supported, found: {project_id}"
         )
     project_id = project_id[0]
-    project = projects.get(project_id.lower())
-    if project is None:
-        raise ProjectNotSupported(project_id)
+    project = get_project(project_id)
     # populate the search
     search = get_search_criteria(ds, project_id)
     [search.pop(key) for key in project.variable_description_facets() if key in search]
