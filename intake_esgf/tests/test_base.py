@@ -447,3 +447,26 @@ def test_sigint_handler_restored():
     t.start()
     t.join()
     assert seen == [before]
+
+
+@pytest.mark.parametrize(
+    "checksum,checksum_type",
+    [
+        ("12203a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7", None),
+        ("3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7", "SHA256"),
+        (
+            "sha256:3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7",
+            None,
+        ),
+    ],
+)
+def test_parse_checksum(checksum: str, checksum_type: str | None):
+    digest = "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
+    out_type, out_hex = base.parse_checksum(checksum, checksum_type)
+    assert out_type == "sha256"
+    assert out_hex == digest
+
+
+def test_parse_checksum_unparseable():
+    assert base.parse_checksum(None, "SHA256") == ("SHA256", None)
+    assert base.parse_checksum("zzzz", "Foo") == ("foo", "zzzz")

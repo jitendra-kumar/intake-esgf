@@ -339,6 +339,48 @@ def _setup_hasher(hash: str | None, hash_algorithm: str | None) -> Multihash | N
     return mh
 
 
+def parse_checksum(
+    checksum: str | None, checksum_type: str | None
+) -> tuple[str | None, str | None]:
+    """
+    Return a normalized `(checksum_type, hex_digest)` pair.
+
+    Indices publish checksums in different forms: a plain hex digest with an algorithm
+    name, a `hash_algorithm:hash` string, or (STAC) a multihash with no algorithm name.
+    Here we unwrap all of these into a lowercase hashlib-style algorithm name and the
+    plain hex digest. If the checksum cannot be interpreted, the inputs are returned
+    unchanged (with the type lowercased).
+
+    Parameters
+    ----------
+    checksum : str, optional
+        The checksum as given by the index.
+    checksum_type : str, optional
+        The algorithm name as given by the index, if any.
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        The algorithm name and the hex digest.
+    """
+    if checksum is None:
+        return checksum_type, None
+    if ":" in checksum and checksum_type is None:
+        checksum_type, checksum = checksum.split(":", 1)
+    fallback = (checksum_type.lower() if checksum_type else None, checksum)
+    try:
+        mh = _setup_hasher(checksum, checksum_type)
+    except Exception:
+        return fallback
+    if mh is None:
+        return fallback
+    name = next(
+        (fname for fcn, fname, _ in multihash.FuncReg._std_func_data if fcn == mh.func),
+        None,
+    )
+    return name or fallback[0], mh.digest.hex()
+
+
 PROGRESS = Progress()
 MASTER_ID = 0
 done_event = Event()
