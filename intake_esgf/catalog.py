@@ -36,6 +36,7 @@ from intake_esgf.exceptions import (
     NoSearchResults,
     ProjectHasNoFacet,
 )
+from intake_esgf.projects import get_project
 from intake_esgf.projects import projects as esgf_projects
 
 
@@ -165,7 +166,7 @@ class ESGFCatalog:
         project = self.df["project"].unique()
         if len(project) != 1:
             raise ValueError("Only single project searches are supported")
-        self.project = esgf_projects[project[0].lower()]
+        self.project = get_project(project[0])
 
     def _minimal_key_format(
         self, ignore_facets: list[str] | str | None = None
@@ -351,6 +352,19 @@ class ESGFCatalog:
                 raise ValueError(
                     "Cross projects searches are not allowed natively. Try breaking up your search into several, one for each project."
                 )
+
+        # the indices match the project case-sensitively, so use the canonical name
+        canonical = [
+            esgf_projects[p.lower()].name if p.lower() in esgf_projects else p
+            for p in (
+                search["project"]
+                if isinstance(search["project"], list)
+                else [search["project"]]
+            )
+        ]
+        search["project"] = (
+            canonical if isinstance(search["project"], list) else canonical[0]
+        )
         _warn_stac_cmip6(self, search["project"])
 
         # log what is being searched for

@@ -92,3 +92,14 @@ class ProjectHasNoFacet(IntakeESGFException):
 
     def __str__(self):
         return f"The '{self.project}' project does not have a '{self.facet}' facet"
+
+
+class VariableInfoNotAvailable(IntakeESGFException, AssertionError):
+    """No variable information could be found for the query in this project."""
+
+    def __init__(self, project: str, query: str):
+        self.project = project
+        self.query = query
+
+    def __str__(self):
+        return f"No variable information found for '{self.query}' in the '{self.project}' project"

@@ -399,3 +399,51 @@ def test_get_total_size():
     size, unit = base.get_total_size([{"size": 1e12}])
     assert np.allclose(size, 1000)
     assert unit == "Gb"
+
+
+def test_import_off_main_thread():
+    """Importing must not install a signal handler (which fails off the main thread)."""
+    import subprocess
+    import sys
+
+    code = (
+        "import signal, threading\n"
+        "before = signal.getsignal(signal.SIGINT)\n"
+        "err = []\n"
+        "def run():\n"
+        "    try:\n"
+        "        import intake_esgf.base\n"
+        "    except Exception as e:\n"
+        "        err.append(e)\n"
+        "t = threading.Thread(target=run); t.start(); t.join()\n"
+        "assert not err, err\n"
+        "assert signal.getsignal(signal.SIGINT) is before\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_sigint_handler_restored():
+    import signal
+    import threading
+
+    from intake_esgf.base import _sigint_handler, done_event, handle_sigint
+
+    before = signal.getsignal(signal.SIGINT)
+    with _sigint_handler():
+        assert signal.getsignal(signal.SIGINT) is handle_sigint
+        done_event.set()
+    assert signal.getsignal(signal.SIGINT) is before
+    with _sigint_handler():  # clears a stale event
+        assert not done_event.is_set()
+
+    # off the main thread it is a no-op
+    seen = []
+
+    def run():
+        with _sigint_handler():
+            seen.append(signal.getsignal(signal.SIGINT))
+
+    t = threading.Thread(target=run)
+    t.start()
+    t.join()
+    assert seen == [before]
