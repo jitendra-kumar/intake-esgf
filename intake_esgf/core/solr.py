@@ -126,6 +126,45 @@ class SolrESGFIndex:
         self.logger.info(f"└─{self} results={len(df)} {total_time=:.2f}")
         return df
 
+    def facet_counts(self, facet: str, **filters: Any) -> dict[str, int]:
+        """
+        Return the number of datasets for each value of a facet.
+
+        This asks the index for the facet only, so no records are retrieved.
+
+        Parameters
+        ----------
+        facet : str
+            The facet whose values are counted.
+        **filters
+            Facet keywords and values by which to constrain the counts.
+
+        Returns
+        -------
+        dict[str, int]
+            The number of datasets found for each value of the facet.
+        """
+        response_time = time.time()
+        search = dict(
+            type="Dataset",
+            project=intake_esgf.conf["default_project"],
+            latest=True,
+            retracted=False,
+            distrib=self.distrib,
+        )
+        search.update(filters)
+        search.update(dict(facets=facet, limit=0, format="application/solr+json"))
+        response = self.session.get(f"{self.url}/esg-search/search", params=search)
+        response.raise_for_status()
+        # Solr returns a flat list of alternating values and counts
+        flat = response.json()["facet_counts"]["facet_fields"].get(facet, [])
+        counts = {str(v): int(c) for v, c in zip(flat[::2], flat[1::2]) if c > 0}
+        response_time = time.time() - response_time
+        self.logger.info(
+            f"└─{self} facet={facet} values={len(counts)} {response_time=:.2f}"
+        )
+        return counts
+
     def get_file_info(self, dataset_ids: list[str], **facets) -> list[dict[str, Any]]:
         response_time = time.time()
         search = dict(

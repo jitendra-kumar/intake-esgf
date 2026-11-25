@@ -354,17 +354,7 @@ class ESGFCatalog:
                 )
 
         # the indices match the project case-sensitively, so use the canonical name
-        canonical = [
-            esgf_projects[p.lower()].name if p.lower() in esgf_projects else p
-            for p in (
-                search["project"]
-                if isinstance(search["project"], list)
-                else [search["project"]]
-            )
-        ]
-        search["project"] = (
-            canonical if isinstance(search["project"], list) else canonical[0]
-        )
+        search["project"] = _canonical_project(search["project"])
         _warn_stac_cmip6(self, search["project"])
 
         # log what is being searched for
@@ -401,6 +391,85 @@ class ESGFCatalog:
         self.logger.info(f"\x1b[36;32msearch end\033[0m total_time={search_time:.2f}")
         self.last_search = search
         return self
+
+    def facet_counts(
+        self, facet: str, quiet: bool = False, **filters: Any
+    ) -> pd.Series:
+        """
+        Return the approximate number of datasets for each value of a facet.
+
+        This is a cheap way to discover what values a facet takes in a search. The
+        indices are asked to aggregate over their records so nothing is downloaded
+        and the catalog itself is not changed. Because the same dataset may be
+        replicated in several indices, the counts are summed and should be treated
+        as approximate upper bounds.
+
+        Parameters
+        ----------
+        facet
+            The facet whose values are counted.
+        quiet
+            Enable to silence the progress bar.
+        **filters
+            Any number of facet keywords and values by which to constrain the counts.
+            As in `search()`, the `project` defaults to the `default_project`
+            configuration option.
+
+        Returns
+        -------
+        pd.Series
+            The approximate counts indexed by facet value, in descending order.
+        """
+        filters = {
+            k: v
+            for k, v in filters.items()
+            if (isinstance(v, str) and len(v) > 0) or not isinstance(v, str)
+        }
+        filters["project"] = _canonical_project(
+            filters.get("project", intake_esgf.conf["default_project"])
+        )
+        if isinstance(filters["project"], list) and len(filters["project"]) > 1:
+            raise ValueError(
+                "Cross projects searches are not allowed natively. Try breaking up your search into several, one for each project."
+            )
+
+        def _facet_counts(index) -> dict[str, int]:
+            try:
+                return index.facet_counts(facet, **filters)
+            except NotImplementedError:
+                self.logger.info(f"└─{index} \x1b[91;20mno facet counts\033[0m")
+                warnings.warn(f"{index} does not support facet counts, skipping")
+            except NoSearchResults:
+                pass
+            except (requests.exceptions.RequestException, APIError):
+                self.logger.info(f"└─{index} \x1b[91;20mno response\033[0m")
+                warnings.warn(
+                    f"{index} failed to return a response, counts may be incomplete"
+                )
+            return {}
+
+        self.logger.info(f"\x1b[36;32mfacet counts begin\033[0m {facet=} {filters=}")
+        count_time = time.time()
+        with ThreadPool(len(self.indices)) as pool:
+            results = list(
+                track(
+                    pool.imap_unordered(_facet_counts, self.indices),
+                    description="Counting facet values",
+                    total=len(self.indices),
+                    disable=quiet,
+                )
+            )
+        counts: dict[str, int] = {}
+        for result in results:
+            for value, count in result.items():
+                counts[value] = counts.get(value, 0) + count
+        count_time = time.time() - count_time
+        self.logger.info(
+            f"\x1b[36;32mfacet counts end\033[0m values={len(counts)} total_time={count_time:.2f}"
+        )
+        return pd.Series(counts, name=facet, dtype="int64").sort_values(
+            ascending=False, kind="stable"
+        )
 
     def from_tracking_ids(
         self, tracking_ids: str | list[str], quiet: bool = False
@@ -984,6 +1053,19 @@ class ESGFCatalog:
             name and description fields.
         """
         return variable_info(query, project)
+
+
+def _canonical_project(project: str | list[str]) -> str | list[str]:
+    """
+    Return the project name(s) as the indices spell them, if the project is known.
+    """
+    if isinstance(project, list):
+        return [cast(str, _canonical_project(p)) for p in project]
+    return (
+        esgf_projects[project.lower()].name
+        if project.lower() in esgf_projects
+        else project
+    )
 
 
 def _load_into_dsd(
