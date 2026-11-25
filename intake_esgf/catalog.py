@@ -1031,9 +1031,10 @@ def _simplify_stream_links(
     for key in streamed_keys:
         links = [str(link) for link in set(dsd[key])]
         links = sort_by_transer_speed(links)
-        if all([link.endswith(".nc") for link in links]):  # OPENDAP links
-            links = [link for link in links if _host(link) == _host(links[0])]
-        if any(
+        if links and all(link.endswith(".nc") for link in links):  # OPENDAP links
+            # keep every file, but only from the fastest host
+            dsd[key] = [link for link in links if _host(link) == _host(links[0])]
+        elif any(
             [
                 link
                 for link in links
@@ -1042,8 +1043,8 @@ def _simplify_stream_links(
                 or link.endswith("parq")
             ]
         ):  # Kerchunk
-            links = [links[0]]
-        if all([link for link in links if link.endswith("nca")]):  # CFA
+            dsd[key] = [links[0]]
+        elif links and all(link.endswith("nca") for link in links):  # CFA
             dsd[key] = [links[0]]
     return dsd
 
