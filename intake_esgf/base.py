@@ -33,10 +33,9 @@ from intake_esgf.database import (
 from intake_esgf.exceptions import (
     DownloadIncomplete,
     NoSearchResults,
-    ProjectNotSupported,
     StalledDownload,
 )
-from intake_esgf.projects import projects
+from intake_esgf.projects import get_project
 
 # Windows has no flock, there we download without locking partial files. We check
 # `sys.platform` directly (rather than catching ImportError) so mypy understands it.
@@ -280,9 +279,7 @@ def combine_results(
             f"Only single project queries are supported, but found {project_id}"
         )
     project_id = project_id[0]
-    project = projects.get(project_id.lower(), None)
-    if project is None:
-        raise ProjectNotSupported(project_id)
+    project = get_project(project_id)
     variable_facet = project.variable_facet()
     combine_time = time.time()
     df = df.drop_duplicates(subset=[variable_facet, "id"]).reset_index(drop=True)
@@ -895,9 +892,7 @@ def get_search_criteria(
         raise ValueError(
             "Cannot get search criteria if 'project' not in the attributes or specified."
         )
-    project = projects.get(project_id.lower())
-    if project is None:
-        raise ProjectNotSupported(project_id)
+    project = get_project(project_id)
     search = {
         key: ds.attrs[key]
         for key in set(project.master_id_facets()).intersection(ds.attrs.keys())
@@ -930,9 +925,7 @@ def add_variable(variable_id: str, ds: xr.Dataset, catalog) -> xr.Dataset:
             f"Only single project queries are supported, found: {project_id}"
         )
     project_id = project_id[0]
-    project = projects.get(project_id.lower())
-    if project is None:
-        raise ProjectNotSupported(project_id)
+    project = get_project(project_id)
     # populate the search
     search = get_search_criteria(ds, project_id)
     [search.pop(key) for key in project.variable_description_facets() if key in search]

@@ -26,8 +26,12 @@ from globus_sdk.tokenstorage import SimpleJSONFileAdapter
 import intake_esgf
 import intake_esgf.base as base
 import intake_esgf.logging
-from intake_esgf.exceptions import GlobusTransferError
-from intake_esgf.projects import get_project_facets
+from intake_esgf.exceptions import (
+    GlobusTransferError,
+    ProjectNotSupported,
+    VariableInfoNotAvailable,
+)
+from intake_esgf.projects import get_project, get_project_facets
 
 CLIENT_ID = "81a13009-8326-456e-a487-2d1557d8eb11"  # intake-esgf
 RECORD_WARNING_THRESHOLD = 20000
@@ -243,6 +247,16 @@ def variable_info(
     """Return a dataframe with variable information from a query."""
     client = SearchClient()
     client.transport.session = intake_esgf.conf.get_cached_session()
+    # the variable facet is project dependent, but we also keep the historical defaults
+    variable_facets = ["variable", "variable_id"]
+    try:
+        esgf_project = get_project(project)
+        project = esgf_project.name  # the index matches case-sensitively
+        facet = esgf_project.variable_facet()
+        if facet not in variable_facets:
+            variable_facets.append(facet)
+    except ProjectNotSupported:
+        pass
     # first we populate a list of related variables
     uuid = GlobusESGFIndex.GLOBUS_INDEX_IDS["ESGF2-US-1.5-Catalog"]
     q = SearchQueryV1(
@@ -266,7 +280,7 @@ def variable_info(
                 "field_name": v,
                 "type": "terms",
             }
-            for v in ["variable", "variable_id"]
+            for v in variable_facets
         ],
     )
     response = client.post_search(uuid, q)  # type: ignore
@@ -281,7 +295,8 @@ def variable_info(
     )
     # which facet do we use for variables?
     var_facet = [fr["name"] for fr in response.data["facet_results"] if fr["buckets"]]
-    assert var_facet
+    if not var_facet:
+        raise VariableInfoNotAvailable(project, query)
     var_facet = var_facet[0]
     # then we loop through them and extract information for the user
     dfs = []
