@@ -318,3 +318,27 @@ def test_simplify_stream_links_single_link_types():
     for links in [kerchunk, cfa]:
         dsd = _simplify_stream_links([{"key": "k"}], {"k": list(links)})
         assert len(dsd["k"]) == 1
+
+
+def test_file_info(catalog, monkeypatch):
+    digest = "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
+    infos = [
+        {
+            "key": "a",
+            "path": Path("a.nc"),
+            "checksum": digest,
+            "checksum_type": "SHA256",
+        },
+        {
+            "key": "b",
+            "path": Path("b.nc"),
+            "checksum": f"1220{digest}",
+            "checksum_type": None,
+        },
+        {"key": "c", "path": Path("c.nc")},
+    ]
+    monkeypatch.setattr(catalog, "_get_file_info", lambda **kwargs: infos)
+    out = catalog.file_info()
+    assert [i["checksum_type"] for i in out[:2]] == ["sha256", "sha256"]
+    assert [i["checksum_hex"] for i in out[:2]] == [digest, digest]
+    assert "checksum_hex" not in out[2]

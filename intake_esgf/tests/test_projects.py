@@ -19,4 +19,3 @@ def test_names_and_lookup():
 
 def test_supported_projects_unchanged():
     assert "CORDEX-CMIP6" in intake_esgf.supported_projects()
-
