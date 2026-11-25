@@ -102,3 +102,15 @@ def test_pickle(east) -> None:
 def test_parse_file_daterange(path, expected):
     info = _parse_file_daterange({"path": path})
     assert (info["file_start"], info["file_end"]) == expected
+
+
+def test_parse_file_validation_multihash():
+    from intake_esgf.core.stac import _parse_file_validation
+
+    digest = "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
+    asset = {"file:checksum": f"1220{digest}"}
+    info = _parse_file_validation({}, asset)
+    assert info["checksum_type"] == "sha256"
+    assert info["checksum"] == f"1220{digest}"
+    assert info["checksum_hex"] == digest
+    assert _parse_file_validation({}, {}) == {}

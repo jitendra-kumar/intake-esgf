@@ -465,6 +465,52 @@ class ESGFCatalog:
 
         return self
 
+    def file_info(
+        self, separator: str = ".", quiet: bool = False
+    ) -> list[dict[str, Any]]:
+        """
+        Return the file records of the datasets in the catalog.
+
+        Nothing is downloaded and no authentication is required. This is the
+        information that `to_path_dict()` uses to decide how each file is accessed.
+
+        Parameters
+        ----------
+        separator: str
+            The character to use in between facets in the `key` values.
+        quiet: bool
+            Enable to silence the progress bar.
+
+        Returns
+        -------
+        list[dict]
+            One record per file, combined from all indices, with the keys:
+
+            - `key`: the master_id facets joined by `separator`
+            - `dataset_id`: the id of the dataset to which the file belongs
+            - `path`: the path of the file relative to a data root (`Path`)
+            - `size`: the file size in bytes, if given by the index
+            - `checksum_type`: the lowercase hashlib-style algorithm name, if known
+            - `checksum`: the checksum as published by the index
+            - `checksum_hex`: the plain hex digest of the checksum, if known
+            - `file_start`, `file_end`: the time extent parsed from the file name
+              (`pd.Timestamp` or `None`)
+            - `HTTPServer`, `OPENDAP`, `Globus`, `Kerchunk`, `CFA`: lists of access
+              links, present where the indices provided them. Use
+              `intake_esgf.base.get_globus_endpoints()` to extract the endpoint UUIDs
+              from the `Globus` links.
+        """
+        infos = self._get_file_info(separator=separator, quiet=quiet)
+        for info in infos:
+            if "checksum" not in info:
+                continue
+            checksum_type, checksum_hex = base.parse_checksum(
+                info["checksum"], info.get("checksum_type")
+            )
+            info["checksum_type"] = checksum_type
+            info["checksum_hex"] = checksum_hex
+        return infos
+
     def _get_file_info(
         self, separator: str = ".", quiet: bool = False
     ) -> list[dict[str, Any]]:

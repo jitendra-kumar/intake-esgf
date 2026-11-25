@@ -130,14 +130,16 @@ def _parse_file_validation(
     info: dict[str, Any], asset: dict[str, Any]
 ) -> dict[str, Any]:
     """
-    Assumes a SHA256 hash was generated if not given as that what was done
-    before.
+    The STAC file extension publishes a multihash, from which we parse the algorithm
+    and plain hex digest. The original value is kept in `checksum`.
     """
     if "file:checksum" not in asset:
         return info
     checksum = asset["file:checksum"]
-    info["checksum_type"] = None
+    checksum_type, checksum_hex = base.parse_checksum(checksum, None)
+    info["checksum_type"] = checksum_type
     info["checksum"] = checksum
+    info["checksum_hex"] = checksum_hex
     return info
 
 
