@@ -4,9 +4,10 @@ import logging
 import re
 import time
 import warnings
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import requests
@@ -28,6 +29,8 @@ import intake_esgf.base as base
 import intake_esgf.logging
 from intake_esgf.exceptions import (
     GlobusTransferError,
+    GlobusTransferTimeout,
+    InteractionRequired,
     ProjectNotSupported,
     VariableInfoNotAvailable,
 )
@@ -394,8 +397,16 @@ def variable_info(
     return df
 
 
-def get_authorized_transfer_client() -> TransferClient:
-    """Return a transfer client authorized to make transfers."""
+def get_authorized_transfer_client(interactive: bool = True) -> TransferClient:
+    """
+    Return a transfer client authorized to make transfers.
+
+    Parameters
+    ----------
+    interactive : bool
+        Disable to raise `InteractionRequired` instead of prompting the user to
+        authorize when no valid tokens are found.
+    """
     config_path = Path.home() / ".config" / "intake-esgf"
     token_adapter = SimpleJSONFileAdapter(config_path / "tokens.json")
     client = NativeAppAuthClient(CLIENT_ID)
@@ -406,6 +417,8 @@ def get_authorized_transfer_client() -> TransferClient:
         tokens is None
         or datetime.fromtimestamp(tokens["expires_at_seconds"]) < datetime.now()
     ):
+        if not interactive:
+            raise InteractionRequired("Globus authorization")
         client.oauth2_start_flow()
         authorize_url = client.oauth2_get_authorize_url()
         print(
@@ -432,7 +445,10 @@ You will have to login (or be logged in) to your Globus account. Globus will als
 
 
 def create_globus_transfer(
-    infos: list[dict[str, Any]], globus_endpoint: str, globus_path: str | Path = ""
+    infos: list[dict[str, Any]],
+    globus_endpoint: str,
+    globus_path: str | Path = "",
+    interactive: bool = True,
 ) -> list[GlobusHTTPResponse]:
     """
     Create
@@ -441,13 +457,15 @@ def create_globus_transfer(
     ----------
     infos : list[dict]
         The file information which has come from the
+    interactive : bool
+        Disable to raise `InteractionRequired` instead of prompting for authorization.
     """
     # if nothing to do just return
     if not infos:
         return []
 
     # is the destination endpoint active?
-    client = get_authorized_transfer_client()
+    client = get_authorized_transfer_client(interactive)
     try:
         client.get_endpoint(globus_endpoint)
     except TransferAPIError as exc:
@@ -496,19 +514,81 @@ def create_globus_transfer(
     return tasks
 
 
-def monitor_globus_transfer(tasks: list[GlobusHTTPResponse]) -> None:
+def _log_task_fault(
+    client: TransferClient,
+    task_id: str,
+    faults: int,
+    logger: logging.Logger,
+    first: bool,
+) -> None:
+    """Report the latest error event of a task which has faulted."""
+    description = ""
+    try:
+        events = client.task_event_list(
+            task_id, limit=1, query_params={"filter": "is_error:1"}
+        )
+        for event in events:
+            description = f": {event['code']} {event['description']}"
+    except Exception:  # reporting must never break the wait
+        pass
+    logger.info(f"globus transfer has faulted {faults=} {task_id=}{description}")
+    if first:
+        warnings.warn(
+            f"Globus transfer {task_id} reported a fault{description}. Faults are often "
+            "transient and Globus will retry, so we will keep waiting."
+        )
+
+
+def monitor_globus_transfer(
+    tasks: Sequence[GlobusHTTPResponse | str], timeout: float | None = None
+) -> None:
     """
     Monitor the status of the provided Globus transfers.
 
+    Globus keeps a task `ACTIVE` while it retries after faults, so a failing transfer
+    may never finish. Faults are reported in the log as they occur.
 
+    Parameters
+    ----------
+    tasks : list[GlobusHTTPResponse | str]
+        The task documents returned when the transfers were submitted, or task ids.
+    timeout : float, optional
+        The maximum time in seconds to wait for all of the tasks. By default we wait
+        indefinitely. The tasks are not cancelled on timeout.
+
+    Raises
+    ------
+    GlobusTransferError
+        If a task ends with a status other than `SUCCEEDED`.
+    GlobusTransferTimeout
+        If the timeout is reached while tasks are still active.
     """
+    logger = logging.getLogger(intake_esgf.logging.NAME)
     client = get_authorized_transfer_client()
-    for task_doc in tasks:
+    deadline = None if timeout is None else time.monotonic() + timeout
+    task_ids = [t if isinstance(t, str) else str(t["task_id"]) for t in tasks]
+    for i, task_id in enumerate(task_ids):
+        logger.info(f"waiting on globus transfer {task_id=}")
         time_interval = 5.0
-        response = client.get_task(task_doc["task_id"])
+        faults = 0
+        response = client.get_task(task_id)
         while response["status"] == "ACTIVE":
-            time.sleep(time_interval)
+            if (response.get("faults") or 0) > faults:
+                _log_task_fault(
+                    client, task_id, response["faults"], logger, first=(faults == 0)
+                )
+                faults = response["faults"]
+            sleep_time = time_interval
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    pending = task_ids[i:]
+                    logger.info(f"globus transfer timeout {pending=}")
+                    raise GlobusTransferTimeout(pending, cast(float, timeout))
+                sleep_time = min(sleep_time, remaining)
+            time.sleep(sleep_time)
             time_interval = min(time_interval * 1.1, 30.0)
-            response = client.get_task(task_doc["task_id"])
+            response = client.get_task(task_id)
+        logger.info(f"globus transfer {response['status']} {task_id=} {faults=}")
         if response.data["status"] != "SUCCEEDED":
             raise GlobusTransferError(response)

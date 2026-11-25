@@ -133,7 +133,11 @@ def select_streaming_link(links: list[str], df_rate: pd.DataFrame) -> str:
 
 
 def partition_infos(
-    infos: list[dict], prefer_streaming: bool, prefer_globus: bool
+    infos: list[dict],
+    prefer_streaming: bool,
+    prefer_globus: bool,
+    check_local: bool = True,
+    interactive: bool = True,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[str | Path]]]:
     """
     Partition the file info based on how it will be handled.
@@ -153,6 +157,12 @@ def partition_infos(
         Enable to use OPENDAP/VirtualZarr options if present in the info.
     prefer_globus : bool
         Enable to use Globus transfer options if present in the info.
+    check_local : bool
+        Disable to skip the check for local copies of the files. This is used when
+        the destination is not the local machine.
+    interactive : bool
+        Disable to raise `InteractionRequired` instead of prompting for Globus
+        authorization.
 
     Returns
     -------
@@ -180,6 +190,8 @@ def partition_infos(
 
         # 1) does the file already exist locally?
         try:
+            if not check_local:
+                raise FileNotFoundError
             local_path = get_local_file(
                 info["path"],
                 intake_esgf.conf["esg_dataroot"] + intake_esgf.conf["local_cache"],
@@ -218,7 +230,7 @@ def partition_infos(
                 if uuid in active_endpoints:
                     continue
                 client = (
-                    globus.get_authorized_transfer_client()
+                    globus.get_authorized_transfer_client(interactive)
                     if client is None
                     else client
                 )
