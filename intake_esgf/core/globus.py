@@ -35,6 +35,7 @@ from intake_esgf.projects import get_project, get_project_facets
 
 CLIENT_ID = "81a13009-8326-456e-a487-2d1557d8eb11"  # intake-esgf
 RECORD_WARNING_THRESHOLD = 20000
+FACET_COUNT_SIZE = 10000  # maximum number of values requested for a facet
 
 
 class GlobusESGFIndex:
@@ -143,6 +144,66 @@ class GlobusESGFIndex:
         response_time = time.time() - response_time
         self.logger.info(f"└─{self} results={len(df)} {response_time=:.2f}")
         return df
+
+    def facet_counts(self, facet: str, **filters: Any) -> dict[str, int]:
+        """
+        Return the number of datasets for each value of a facet.
+
+        This uses a Globus Search facet aggregation, so no records are retrieved.
+
+        Parameters
+        ----------
+        facet : str
+            The facet whose values are counted.
+        **filters
+            Facet keywords and values by which to constrain the counts.
+
+        Returns
+        -------
+        dict[str, int]
+            The number of datasets found for each value of the facet.
+        """
+        response_time = time.time()
+        filters = {
+            **dict(
+                type="Dataset",
+                project=intake_esgf.conf["default_project"],
+                latest=True,
+                retracted=False,
+            ),
+            **filters,
+        }
+        query = SearchQueryV1(
+            q="",
+            limit=0,
+            filters=[
+                {
+                    "field_name": key,
+                    "values": val if isinstance(val, list) else [val],
+                    "type": "match_any",
+                }
+                for key, val in filters.items()
+            ],
+            facets=[
+                {
+                    "name": facet,
+                    "field_name": facet,
+                    "type": "terms",
+                    "size": FACET_COUNT_SIZE,
+                }
+            ],
+        )
+        response = self.client.post_search(self.index_id, query)  # type: ignore
+        counts = {
+            str(bucket["value"]): int(bucket["count"])
+            for result in response.data["facet_results"]
+            for bucket in result["buckets"]
+        }
+        response_time = time.time() - response_time
+        self.logger.info(
+            f"└─{self} facet={facet} values={len(counts)} {response_time=:.2f}"
+        )
+        return counts
 
     def get_file_info(
         self, dataset_ids: list[str], **facets: Any

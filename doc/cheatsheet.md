@@ -56,6 +56,9 @@ cat.session_log()                                       # what exactly did we ju
 
 cat.variable_info("text")                  # which variables are related to this text?
 
+cat.facet_counts("variable_id", source_id="CanESM5")  # approx. dataset counts per value
+cat.file_info()                       # per-file records, no download needed
+
 
 
 
