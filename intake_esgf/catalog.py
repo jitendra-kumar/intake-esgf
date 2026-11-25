@@ -32,6 +32,7 @@ from intake_esgf.database import (
 from intake_esgf.exceptions import (
     DatasetInitError,
     DatasetLoadError,
+    InteractionRequired,
     LocalCacheNotWritable,
     NoSearchResults,
     ProjectHasNoFacet,
@@ -709,6 +710,8 @@ class ESGFCatalog:
         ignore_facets: None | str | list[str] = None,
         separator: str = ".",
         quiet: bool = False,
+        globus_timeout: float | None = None,
+        interactive: bool = True,
     ) -> dict[str, list[str | Path]]:
         """
         Return the current search as a dictionary of paths to files.
@@ -733,6 +736,13 @@ class ESGFCatalog:
             When generating the keys, the string to use as a seperator of facets.
         quiet: bool
             Enable to quiet the progress bars.
+        globus_timeout: float, optional
+            The maximum time in seconds to wait for Globus transfers to complete. By
+            default we wait indefinitely. If reached, `GlobusTransferTimeout` is
+            raised and the transfers are left running.
+        interactive: bool
+            Disable to fail fast, raising `InteractionRequired`, rather than prompting
+            for Globus authorization or download confirmation.
         """
         if self.df is None or len(self.df) == 0:
             raise ValueError("No entries to retrieve.")
@@ -749,6 +759,7 @@ class ESGFCatalog:
             raw_infos,
             prefer_streaming,
             prefer_globus,
+            interactive=interactive,
         )
 
         #
@@ -758,12 +769,17 @@ class ESGFCatalog:
         tasks = []
         if infos["globus"]:
             tasks = create_globus_transfer(
-                infos["globus"], cast(str, globus_endpoint), str(globus_path)
+                infos["globus"],
+                cast(str, globus_endpoint),
+                str(globus_path),
+                interactive,
             )
 
         # download in parallel using threads
         if infos["https"]:
             if intake_esgf.conf["confirm_download"]:
+                if not interactive:
+                    raise InteractionRequired("download confirmation")
                 download_size, download_unit = base.get_total_size(infos["https"])
                 response = (
                     input(
@@ -788,7 +804,9 @@ class ESGFCatalog:
         dsd, missing_files = _load_into_dsd(dsd, infos["https"])
 
         if prefer_globus and infos["globus"]:
-            monitor_globus_transfer(tasks)  # blocks while transfer continues
+            monitor_globus_transfer(
+                tasks, globus_timeout
+            )  # blocks while transfer continues
 
             # unpack the globus files which should now exist in local cache
             dsd, missing_globus = _load_into_dsd(dsd, infos["globus"])
@@ -843,6 +861,8 @@ class ESGFCatalog:
         separator: str = ".",
         quiet: bool = False,
         open_kwargs: dict[str, Any] | None = None,
+        globus_timeout: float | None = None,
+        interactive: bool = True,
     ) -> dict[str, xr.Dataset]:
         """
         Return the current search as a dictionary of datasets.
@@ -871,6 +891,13 @@ class ESGFCatalog:
             Enable to quiet the progress bars.
         open_kwargs: dict
             A dictionary of keyword arguments to pass through to xarray.open_mfdataset().
+        globus_timeout: float, optional
+            The maximum time in seconds to wait for Globus transfers to complete. By
+            default we wait indefinitely. If reached, `GlobusTransferTimeout` is
+            raised and the transfers are left running.
+        interactive: bool
+            Disable to fail fast, raising `InteractionRequired`, rather than prompting
+            for Globus authorization or download confirmation.
         """
         # if no kwargs are passed, use the default dictionary
         if open_kwargs is None:
@@ -890,6 +917,8 @@ class ESGFCatalog:
             ignore_facets=ignore_facets,
             separator=separator,
             quiet=quiet,
+            globus_timeout=globus_timeout,
+            interactive=interactive,
         )
 
         # load paths into xarray objects (also log files accessed)
@@ -948,6 +977,116 @@ class ESGFCatalog:
             }
 
         return ds
+
+    def plan(
+        self,
+        prefer_streaming: bool | None = None,
+        globus_endpoint: str | None = None,
+        separator: str = ".",
+        quiet: bool = False,
+        interactive: bool = True,
+    ) -> list[dict[str, Any]]:
+        """
+        Return how `to_path_dict()` would access each file, without doing so.
+
+        Nothing is downloaded or transferred. Authentication is only needed if a
+        `globus_endpoint` is given, as we must check which source endpoints are active.
+
+        Parameters
+        ----------
+        prefer_streaming: bool
+            Enable to use streaming links instead of downloading data.
+        globus_endpoint: str
+            A destination globus endpoint UUID, if you intend to use Globus transfers.
+        separator: str
+            The character to use in between facets in the `key` values.
+        quiet: bool
+            Enable to silence the progress bar.
+        interactive: bool
+            Disable to raise `InteractionRequired` rather than prompt for Globus
+            authorization.
+
+        Returns
+        -------
+        list[dict]
+            The records of `file_info()`, each with an additional `access` key which is
+            one of `exist` (a local copy was found), `stream`, `globus`, or `https`.
+        """
+        if self.df is None or len(self.df) == 0:
+            raise ValueError("No entries to retrieve.")
+        prefer_streaming = (
+            intake_esgf.conf["prefer_streaming"]
+            if prefer_streaming is None
+            else prefer_streaming
+        )
+        infos, _ = base.partition_infos(
+            self.file_info(separator=separator, quiet=quiet),
+            prefer_streaming,
+            globus_endpoint is not None,
+            interactive=interactive,
+        )
+        return [
+            {**info, "access": access}
+            for access, partition in infos.items()
+            for info in partition
+        ]
+
+    def submit_transfer(
+        self,
+        globus_endpoint: str,
+        globus_path: Path = Path("/"),
+        separator: str = ".",
+        quiet: bool = False,
+        interactive: bool = True,
+    ) -> list[str]:
+        """
+        Submit Globus transfers of the current search and return the task ids.
+
+        Unlike `to_path_dict(globus_endpoint=...)`, this returns as soon as the
+        transfers are submitted, does not look for or load files in the local cache
+        (so the destination may be a remote endpoint), and never prompts for download
+        confirmation. Use `monitor_globus_transfer()` to wait on the tasks.
+
+        Parameters
+        ----------
+        globus_endpoint: str
+            The destination globus endpoint UUID.
+        globus_path: Path
+            The relative path to the endpoint root into which we will save files.
+        separator: str
+            The character to use in between facets in the `key` values.
+        quiet: bool
+            Enable to silence the progress bar.
+        interactive: bool
+            Disable to raise `InteractionRequired` rather than prompt for Globus
+            authorization.
+
+        Returns
+        -------
+        list[str]
+            The Globus task ids, one for each source endpoint used. Files which are not
+            available using Globus are not transferred and a warning is issued.
+        """
+        if self.df is None or len(self.df) == 0:
+            raise ValueError("No entries to retrieve.")
+        infos, _ = base.partition_infos(
+            self.file_info(separator=separator, quiet=quiet),
+            prefer_streaming=False,
+            prefer_globus=True,
+            check_local=False,
+            interactive=interactive,
+        )
+        tasks = create_globus_transfer(
+            infos["globus"], globus_endpoint, str(globus_path), interactive
+        )
+        task_ids = [str(task["task_id"]) for task in tasks]
+        self.logger.info(f"globus transfers submitted {task_ids=}")
+        if infos["https"]:
+            warnings.warn(
+                f"{len(infos['https'])} file(s) are not available using Globus and "
+                "were not transferred."
+            )
+        return task_ids
 
     def remove_incomplete(self, complete: Callable[[pd.DataFrame], bool]) -> Self:
         """

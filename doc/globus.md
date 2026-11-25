@@ -72,6 +72,27 @@ Internally this will do several things:
 
 Then the code progresses as usual, looking for cell measures and loading files into xarray Datasets.
 
+## Submitting Without Waiting
+
+If you only want to start the transfers, for instance because the destination is a remote collection or you are running in a script that should not block, use `submit_transfer()`. It returns the Globus task ids as soon as the transfers are submitted, does not look for files in the local cache, and does not prompt for download confirmation.
+
+```python
+task_ids = cat.submit_transfer(COLLECTION_UUID, globus_path="data/ESGF-Data")
+```
+
+To wait on them later, use `monitor_globus_transfer()` which accepts the task ids. Globus keeps a task active while it retries after faults, so you may wish to bound the wait. Faults are reported as they occur, and on timeout a `GlobusTransferTimeout` is raised and the tasks are left running.
+
+```python
+from intake_esgf.core.globus import monitor_globus_transfer
+monitor_globus_transfer(task_ids, timeout=3600)
+```
+
+The same `globus_timeout` option is available in `to_path_dict()` and `to_dataset_dict()`. To see how each file would be accessed before committing to anything, use `cat.plan(globus_endpoint=COLLECTION_UUID)`.
+
+## Non-interactive Use
+
+By default we will prompt for Globus authorization and, if `confirm_download` is set, for confirmation of downloads. In a script or service where no one can answer, pass `interactive=False` to `to_path_dict()`, `to_dataset_dict()`, `plan()` or `submit_transfer()` and an `InteractionRequired` exception is raised instead of prompting.
+
 ## What Can Go Wrong?
 
 While this interface maintains the `intake-esgf` paradigm, and also makes using Globus transfers very simple, it also poses a few difficulties.

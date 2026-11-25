@@ -76,7 +76,7 @@ def test_partition_infos(file_infos, monkeypatch):
         return FakeResponse()
 
     # Partitioning globus links requires an authorized client which we will fake
-    def fake_authorized_transfer_client() -> Any:
+    def fake_authorized_transfer_client(interactive: bool = True) -> Any:
         class FakeClient:
             def get_endpoint(self, uuid: int) -> dict[str, Any]:
                 return {"acl_available": True}
