@@ -280,6 +280,73 @@ class STACESGFIndex:
         self.logger.info(f"└─{self} results={len(df)} {response_time=:.2f}")
         return df
 
+    def facet_counts(self, facet: str, **filters: Any) -> dict[str, int]:
+        """
+        Return the number of datasets for each value of a facet.
+
+        This uses the STAC aggregation extension, so no items are retrieved.
+
+        Parameters
+        ----------
+        facet : str
+            The facet whose values are counted.
+        **filters
+            Facet keywords and values by which to constrain the counts.
+
+        Returns
+        -------
+        dict[str, int]
+            The number of datasets found for each value of the facet.
+
+        Raises
+        ------
+        NotImplementedError
+            If the index does not support aggregations for this facet.
+        """
+        response_time = time.time()
+        project = filters.pop("project", intake_esgf.conf["default_project"])
+        if not isinstance(project, str) and isinstance(project, Sequence):
+            project = project[0]
+        # these are not facets of the STAC items
+        for key in ["type", "latest", "retracted", "limit"]:
+            filters.pop(key, None)
+
+        stac_io = StacApiIO()
+        stac_io.session = self.session
+        client = Client.open(f"https://{self.url}", stac_io=stac_io)
+        if project not in _get_endpoint_collections(client):
+            self.logger.info(f"└─{self} project not found")
+            return {}
+
+        # Facets may be namespaced by the project, the aggregation is named by the
+        # property with the namespace separator replaced
+        queryables = _get_collection_queryables(client, project)
+        namespaced = f"{project.lower()}:{facet}"
+        prop = namespaced if namespaced in queryables else facet
+        if prop not in queryables:
+            raise NotImplementedError(f"{self} cannot aggregate '{facet}'")
+        body: dict[str, Any] = {"aggregations": [f"{prop.replace(':', '_')}_frequency"]}
+        cql_filter = _search_facets_to_cql_filter(filters, project, queryables)
+        if cql_filter is not None:
+            body["filter-lang"] = "cql2-json"
+            body["filter"] = cql_filter
+        response = self.session.post(
+            f"https://{self.url}/collections/{project}/aggregate", json=body
+        )
+        if response.status_code in [400, 404, 501]:
+            raise NotImplementedError(f"{self} does not support aggregations")
+        response.raise_for_status()
+        counts = {
+            str(bucket["key"]): int(bucket["frequency"])
+            for aggregation in response.json()["aggregations"]
+            for bucket in aggregation["buckets"]
+        }
+        response_time = time.time() - response_time
+        self.logger.info(
+            f"└─{self} facet={facet} values={len(counts)} {response_time=:.2f}"
+        )
+        return counts
+
     def from_tracking_ids(self, tracking_ids: list[str]) -> pd.DataFrame:
         return self.search(pid=tracking_ids)
 
