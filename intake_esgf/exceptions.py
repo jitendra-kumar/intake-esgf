@@ -107,3 +107,27 @@ class VariableInfoNotAvailable(IntakeESGFException, AssertionError):
 
     def __str__(self):
         return f"No variable information found for '{self.query}' in the '{self.project}' project"
+
+
+class GlobusTransferTimeout(IntakeESGFException):
+    """We stopped waiting for Globus transfers to complete, but they may still be running."""
+
+    def __init__(self, task_ids: list[str], timeout: float):
+        self.task_ids = task_ids
+        self.timeout = timeout
+
+    def __str__(self):
+        return (
+            f"The Globus Transfer task(s) {self.task_ids} had not completed after "
+            f"{self.timeout} [s]. They have not been cancelled and may still be running."
+        )
+
+
+class InteractionRequired(IntakeESGFException):
+    """A step needs user input, but we were asked not to prompt."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+
+    def __str__(self):
+        return f"User interaction is required ({self.reason}), but interactive=False."

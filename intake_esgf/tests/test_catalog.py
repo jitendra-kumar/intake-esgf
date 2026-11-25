@@ -184,7 +184,7 @@ def test_globus_files_outside_cache_not_incomplete(df_catalog, tmp_path, monkeyp
 
     partition_infos = base.partition_infos
 
-    def partition_with_globus(infos, prefer_streaming, prefer_globus):
+    def partition_with_globus(infos, prefer_streaming, prefer_globus, **kwargs):
         infos = [i for i in infos if "190001-194912" not in str(i["path"])] + [
             i for i in infos if "190001-194912" in str(i["path"])
         ]
@@ -193,8 +193,10 @@ def test_globus_files_outside_cache_not_incomplete(df_catalog, tmp_path, monkeyp
         return partitioned, dsd
 
     monkeypatch.setattr(base, "partition_infos", partition_with_globus)
-    monkeypatch.setattr(catalog, "create_globus_transfer", lambda *args: ["task"])
-    monkeypatch.setattr(catalog, "monitor_globus_transfer", lambda tasks: None)
+    monkeypatch.setattr(catalog, "create_globus_transfer", lambda *args, **kw: ["task"])
+    monkeypatch.setattr(
+        catalog, "monitor_globus_transfer", lambda tasks, timeout=None: None
+    )
     with intake_esgf.conf.set(break_on_error=True):
         with pytest.warns(UserWarning, match="transferred to the Globus endpoint"):
             dsd = cat.to_path_dict(
